@@ -1,5 +1,5 @@
 #$Env:NdCodegenPath=(Resolve-Path "$PsScriptRoot\..\..\submodules\netdaemon\src\HassModel\NetDaemon.HassModel.CodeGenerator\bin\Debug\net9.0\NetDaemon.HassModel.CodeGenerator.exe")
-. NetDaemon.ps1
+. "$PsScriptRoot/NetDaemon.ps1"
 $HaDefaults = ([ordered]@{
     Host = "homeassistant.local"
     Port = 8123

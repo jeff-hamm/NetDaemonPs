@@ -18,6 +18,6 @@ ModuleVersion = '0.0.0'
 Author = 'Jeff Hamm'
 
 FunctionsToExport = @(
-    '*NetDaemon*',
+    '*NetDaemon*'
     )
 }
