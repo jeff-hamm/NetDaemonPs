@@ -17,9 +17,9 @@ class NetDaemon {
     [bool]$PersistDrive = $true
     [string]$NdSlug = "c6a2317c_netdaemon5"
     [string]$NdJson = '{"addon": "c6a2317c_netdaemon5"}'
-    [string]$SrcPath = $PSScriptRoot
+    [string]$SrcPath
     [string]$DriveUsername = "homeassistant"
-    [string]$DriveRoot
+    [string]$DriveRoot,
     $HaDrive
 
     NetDaemon([string]$Name, [string]$LocalHostName, [string]$RemoteHostName, [string]$Ip, [bool]$PreferRemote, [int]$RemotePort, [string]$Hostname, [int]$Port, [bool]$IsSsl, [bool]$PreferDns) {
@@ -134,7 +134,7 @@ class NetDaemon {
         dotnet tool update -g NetDaemon.HassModel.CodeGen
     }
 
-    [void]EntityUpdate() {
+    [void]UpdateEntities() {
         $GenArgs = "-fpe"
         $token = (Get-SecretString -Name "Ha$($this.Name)Token" -AsPlainText)
         if ($this.IsSsl) {
@@ -144,8 +144,21 @@ class NetDaemon {
         if (-not $HaHost) {
             $HaHost = $this.Hostname
         }
-        $Tool = $Env:NdCodegenPath ? $Env:NdCodegenPath : "nd-codegen"
-        Invoke-Expression "$Tool $GenArgs -host $($HaHost) -port $($This.Port) -token $token 2>&1 | Write-Information"
+        $Cfg = Get-NetDaemonConfig
+        if($Cfg.UseCustomCodegen -and $Cfg.NetDaemonLibSrc) {
+            pushd "$($Cfg.NetDaemonLibSrc)\src\HassModel\NetDaemon.HassModel.CodeGenerator"
+            try {
+                $Tool=$Env:NdCodegenPath
+            }
+            finally {
+                popd
+            }
+        }
+        else {
+            $Tool = "nd-codegen"
+        }
+        Write-Debug "$Tool $GenArgs -host $($HaHost) -port $($This.Port) -token ***"
+        Invoke-Expression "$Tool $GenArgs -host $($HaHost) -port $($This.Port) -token $token 2>&1 | Write-Information" -Verbose
     }
 
     [void]RestartService() {
@@ -153,24 +166,33 @@ class NetDaemon {
         $this.InvokeService("HASSIO.ADDON_START", $this.NdJson)
     }
 
-    [void]Deploy([string]$OutputPath) {
-        pushd $this.SrcPath
+    [void]Deploy() {
+        $BuildRoot=$this.SrcPath
+        if(!$BuildRoot) {
+            $BuildRoot = $Env:NdAppRoot
+        }
+        if(!$BuildRoot) { 
+            throw "No source path specified"
+        }
+        Log-Debug "Deploying from $BuildRoot"
+        pushd $BuildRoot
         try {
-            Write-Information "dotnet build -c Release ""Hammlet.csproj"""
-            dotnet build -c Release "Hammlet.csproj" -v 2>&1 | Write-Information
+            Write-Information "dotnet build -c Release ""Hammassistant.csproj"" -v n"
+            dotnet build -c Release "Hammassistant.csproj" -v n 2>&1 | Write-Information
             if (-not $?) {
                 throw "Failed to publish"
             }
-            $this.InvokeService("HASSIO.ADDON_STOP", $this.NdJson)
-            if (-not $OutputPath) {
-                $this.GetDriveRoot()
-                $OutputPath = $this.DriveRoot + $this.NetDaemonDirectory
+            $this.GetDriveRoot()
+            $OutputPath = $this.DriveRoot + $this.NetDaemonDirectory
+            if (!$OutputPath) {
+                throw "No output path"
             }
+            $this.InvokeService("HASSIO.ADDON_STOP", $this.NdJson)
             ls -File $OutputPath | ForEach-Object {
                 rm $_ -Force -Recurse -Verbose
             }
-            Write-Information "dotnet publish -c Release ""Hammlet.csproj""--no-build -o ""$OutputPath"""
-            dotnet publish -c Release "Hammlet.csproj" --no-build -o "$OutputPath" 2>&1 | Write-Information
+            Write-Information "dotnet publish -c Release ""Hammassistant.csproj""--no-build -o ""$OutputPath"" -v n"
+            dotnet publish -c Release "Hammassistant.csproj" --no-build -o "$OutputPath"  -v n 2>&1 | Write-Information
             $this.InvokeService("HASSIO.ADDON_START", $this.NdJson)
         } finally {
             popd

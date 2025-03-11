@@ -1,4 +1,3 @@
-#$Env:NdCodegenPath=(Resolve-Path "$PsScriptRoot\..\..\submodules\netdaemon\src\HassModel\NetDaemon.HassModel.CodeGenerator\bin\Debug\net9.0\NetDaemon.HassModel.CodeGenerator.exe")
 . "$PsScriptRoot/NetDaemon.ps1"
 $HaDefaults = ([ordered]@{
     Host = "homeassistant.local"
@@ -28,36 +27,80 @@ function EnvsToDict() {
     }
     return $d;
 }
-
-
+function ConvertTo-ValidVariableName([string]$String) {
+    return ($String -replace '^[^a-zA-Z_]|[^a-zA-Z0-9_]', '_')
+}
 $KnownDaemons=@{}
-function Set-NetDaemonEnvRoot($Path) {
-    $Env:NdEnvRoot=$Path
+function Get-NetDaemonConfig() {
+    return $global:NdConfig
 }
-function Set-NetDaemonCodeGen($Path) {
-    $Env:NdCodegenPath=$Path
-}
-function Reload-NetDaemon($Name) {
-    if($Name) {
-        $KnownDaemons[$Name]=$Null
-        if($global:CurrentNetDaemon.Name -eq $Name) {
-            $global:CurrentNetDaemon=$Null
+function Set-NetDaemonConfig($AppSrc, $EnvironmentsRoot, $NetDaemonLibSrc,[switch]$CustomCodegen, [switch]$Clean) {
+    $Cfg = $global:NdConfig
+    if($Clean -or !$Cfg) {
+        $Cfg = [pscustomobject]@{
+            AppSrc = $AppSrc
+            EnvironmentsRoot = $EnvironmentsRoot
+            NetDaemonLibSrc = $NetDaemonLibSrc,
+            UseCustomCodegen = $CustomCodegen
+        }
+    }else{
+        if($AppSrc) {
+            $Cfg.AppSrc = $AppSrc
+        }
+        if($EnvironmentsRoot) {
+            $Cfg.EnvironmentsRoot = $EnvironmentsRoot
+        }
+        if($NetDaemonLibSrc) {
+            $Cfg.NetDaemonLibSrc = $NetDaemonLibSrc
+        }
+        if($CustomCodegen) {
+            $Cfg.UseCustomCodegen = $CustomCodegen
         }
     }
+    $global:NdConfig = $Cfg
+    return $global:NdConfig
+}
+function Reload-NetDaemon($Name, [switch]$Clean) {
+    if($Clean) {
+        Set-NetDaemonConfig -Clean
+    }
+    if($Name) {
+        Set-NetDaemon -Name $Name -NetDaemon $Null -Current
+    }
     else {
-        $KnownDaemons=@{}
+        $KnownDaemons.Keys | % { Set-NetDaemon -Name $_ -NetDaemon $Null }
         $global:CurrentNetDaemon=$Null
     }
     Import-Module -Name NetDaemonPs -Force
     Get-NetDaemon($Name)
 }
 
+function Set-NetDaemon([string]$Name, $NetDaemon, [switch]$Current) {
+    $KnownDaemons[$Name] = $NetDaemon
+    if($Current) {
+        $global:CurrentNetDaemon = $NetDaemon
+    }
+    $Name=(ConvertTo-ValidVariableName $Name)
+    Set-Variable -Name "Nd$Name" -Value $NetDaemon -Scope Global
+    if($NetDaemon) {
+        Write-Information "Saved as `$global:Nd$Name"
+    }
+    else {
+        Write-Information "Removed `$global:Nd$Name"
+    }
+}
+
 function Get-NetDaemon([string]$Name, $EnvPath, [switch]$Existing, [switch]$Reload) {
     if(!$Name) {
-        $Name=(git rev-parse --abbrev-ref HEAD)
+        if($global:CurrentNetDaemon.Name) {
+            $Name=$global:CurrentNetDaemon.Name
+        }
+        else {
+            $Name=(git rev-parse --abbrev-ref HEAD)
+        }
     }
     if(!$Reload) {
-        if(global:CurrentNetDaemon.Name -eq $Name) {
+        if($global:CurrentNetDaemon.Name -eq $Name) {
             return $global:CurrentNetDaemon
         }
         if($KnownDaemons[$Name]) {
@@ -65,7 +108,7 @@ function Get-NetDaemon([string]$Name, $EnvPath, [switch]$Existing, [switch]$Relo
         }
         if($Existing) {
             return throw "Daemon $Name not loaded"
-        }
+        }   
     }
     return New-NetDaemon -Name $Name -EnvPath $EnvPath
 }
@@ -75,18 +118,18 @@ function New-NetDaemon(
         [string]$LocalHostName, [string]$RemoteHostName, [string]$Ip, [bool]$PreferRemote, [int]$RemotePort, [string]$Hostname, [int]$Port, [bool]$IsSsl, [bool]$PreferDns
     ) {
     if(!$EnvPath) {
-        if($Env:NdEnvRoot){
-            $EnvPath=$Env:NdEnvRoot
+        if($NdConfig?.EnvironmentsRoot){
+            $EnvPath=$NdConfig.EnvironmentsRoot
         }
         else {
             $EnvPath=$PWD
         }
-        if($Name) {
+        if($Name -and (Test-Path "$EnvPath\$Name\.env" -PathType Leaf)) {
             $EnvPath+="\$Name"
         }
         $EnvPath+="\.env"
     }
-    if (Test-Path "$EnvPath") {
+    if (Test-Path "$EnvPath" -PathType Leaf) {
         Write-Information "Loading $EnvPath"
         dotenv "$EnvPath" -AllowClobber
     }
@@ -113,9 +156,7 @@ function New-NetDaemon(
     #     }
     # };
     $NetDaemon = New-NetDaemonFromHashtable -Name $Name -HaDict $HaDict
-    $KnownDaemons[$Name] = $NetDaemon
-    $global:CurrentNetDaemon = $NetDaemon
-#    new($Name, $LocalHostName, $RemoteHostName, $Ip, $PreferRemote, $RemotePort, $HaHost, $Port, $IsSsl, $PreferDns)
+    Set-NetDaemon -Name $Name -NetDaemon $NetDaemon
    return $NetDaemon
 }
 
@@ -170,4 +211,6 @@ function New-NetDaemonFromHashtable($Name,[hashtable]$HaDict) {
         }
         $IsSsl = $IsSsl || ($HaDict["Ssl"] -eq "true")
         return [NetDaemon]::new($Name, $LocalHostName, $RemoteHostName, $Ip, $PreferRemote, $RemotePort, $HaHost, $Port, $IsSsl, $PreferDns)
-    }
+}
+
+echo "NetDaemonPs loaded"
